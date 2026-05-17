@@ -31,6 +31,7 @@ async def before_wakeup(speaker, text, source, app):
     返回值：
         "openclaw" — 进入 OpenClaw 连续对话流程
         "openai"   — 进入 OpenAI 兼容服务连续对话流程（例如 Hermes Agent API Server）
+        "hermes"   — 进入 Hermes Agent 原生 API 连续对话流程（/v1/runs）
         "xiaozhi"  — 进入小智 AI 流程
         None       — 不做额外处理（可在此自行调用 app.send_to_openclaw 等）
 
@@ -74,6 +75,10 @@ async def before_wakeup(speaker, text, source, app):
             await speaker.play(text="小黑来了")
             return "openai"
 
+        if "小赫" in text:
+            await speaker.play(text="小赫来了")
+            return "hermes"
+
         if "小智" in text:
             await speaker.play(text="小智来了")
             return "xiaozhi"
@@ -95,6 +100,10 @@ async def before_wakeup(speaker, text, source, app):
             await speaker.abort_xiaoai()
             return "openai"  # OpenAI-compatible service continuous conversation
 
+        if text == "召唤小赫":
+            await speaker.abort_xiaoai()
+            return "hermes"  # Hermes Agent native /v1/runs continuous conversation
+
         if text == "召唤小智":
             await speaker.abort_xiaoai()
             return "xiaozhi"  # XiaoZhi AI
@@ -114,6 +123,16 @@ async def before_wakeup(speaker, text, source, app):
         if "让小黑" in text:
             await speaker.abort_xiaoai()
             await app.send_to_openai_and_play_reply(text.replace("让小黑", ""))
+            return None
+
+        if "让小赫" in text:
+            await speaker.abort_xiaoai()
+            await app.send_to_hermes_and_play_reply(text.replace("让小赫", ""))
+            return None
+
+        if "告诉小赫" in text:
+            await speaker.abort_xiaoai()
+            await app.send_to_hermes(text.replace("告诉小赫", ""))
             return None
 
 
@@ -144,6 +163,8 @@ async def after_wakeup(speaker, source=None, session_key=None):
         await speaker.play(text="龙虾，再见")
     if source == "openai":
         await speaker.play(text="小黑，再见")
+    if source == "hermes":
+        await speaker.play(text="小赫，再见")
     if source == "xiaozhi":
         await speaker.play(text="小智，再见")
 
@@ -158,6 +179,8 @@ APP_CONFIG = {
             "龙虾你好",
             "你好小黑",
             "小黑你好",
+            "你好小赫",
+            "小赫你好",
         ],
         # 静音多久后自动退出唤醒（秒）
         "timeout": 20,
@@ -293,6 +316,48 @@ APP_CONFIG = {
         "max_tokens": 512,
         "history_max_messages": 20,
         "response_timeout": 120,
+        "tts_speed": 1.0,
+        "tts_speaker": "xiaoai",
+        "session_tts_speakers": {},
+        "exit_keywords": ["退出", "停止", "再见"],
+        "rule_prompt": "注意：将结果处理成纯文字版，不要返回任何 markdown 格式，也不要包含任何代码块，并将字数控制在300字以内",
+        "rule_prompt_for_skill": "注意：这条消息是主人通过小爱音箱发送的，他看不到你回复的文字。字数控制在300字以内",
+        "extra_body": {},
+    },
+    # Hermes Agent native backend configuration
+    # 走 Hermes Agent API Server 的原生 /v1/runs 接口（不是 OpenAI 兼容路径）
+    # 优势：服务端管理 session（不必每轮上传历史）+ 长期记忆 scope（X-Hermes-Session-Key）
+    # 文档：https://hermes-agent.nousresearch.com/docs/user-guide/features/api-server
+    "hermes": {
+        # Hermes API Server 的 /v1 根 URL
+        "base_url": "http://127.0.0.1:8642/v1",
+        # 鉴权 token（如果 API Server 启用了 auth）
+        "api_key": "",
+        # 留空 → 使用服务端配置的默认 model
+        "model": "",
+        # 输入模式：
+        #   - "local_asr": 使用本地 VAD + SherpaASR
+        #   - "xiaoai_asr": 接管小爱原生 ASR 结果
+        "input_mode": "local_asr",
+        # session_key 同时作为：
+        #   1) Hermes 的 session_id（决定服务端会话线程，影响多轮上下文）
+        #   2) X-Hermes-Session-Key 的默认值（决定长期记忆 scope）
+        "session_key": "open-xiaoai-bridge",
+        # 留空表示沿用 session_key；填值则覆盖
+        "server_session_id": "",
+        "memory_session_key": "",
+        # 系统 prompt（映射到 Hermes 的 instructions 字段）
+        "system_prompt": "",
+        "temperature": 0.7,
+        "max_tokens": 512,
+        # 服务端管理历史时本地不必再发；置 True 则改为每轮带上 conversation_history（无状态模式）
+        "send_local_history": False,
+        # 当 send_local_history=True 时，最多保留多少条历史
+        "history_max_messages": 20,
+        # 总等待 run 完成的上限（秒）
+        "response_timeout": 120,
+        # 轮询 GET /v1/runs/{run_id} 的间隔（秒）
+        "poll_interval": 0.5,
         "tts_speed": 1.0,
         "tts_speaker": "xiaoai",
         "session_tts_speakers": {},
