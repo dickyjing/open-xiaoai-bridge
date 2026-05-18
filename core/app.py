@@ -24,6 +24,7 @@ from core.services.protocols.typing import (
 )
 from core.openclaw import OpenClawManager
 from core.openai import OpenAIManager
+from core.hermes import HermesManager
 from core.services.api_server import APIServer
 
 
@@ -38,18 +39,22 @@ class MainApp:
         enable_xiaozhi: bool = True,
         enable_openclaw: bool = False,
         enable_openai: bool = False,
+        enable_hermes: bool = False,
     ):
         """Get singleton instance.
 
         Args:
             enable_xiaozhi: Whether to enable XiaoZhi AI connection (default: True)
             enable_openclaw: Whether to enable OpenClaw connection (default: False)
+            enable_openai: Whether to enable OpenAI-compatible service (default: False)
+            enable_hermes: Whether to enable Hermes Agent native backend (default: False)
         """
         if cls._instance is None:
             cls._instance = MainApp(
                 enable_xiaozhi=enable_xiaozhi,
                 enable_openclaw=enable_openclaw,
                 enable_openai=enable_openai,
+                enable_hermes=enable_hermes,
             )
         return cls._instance
 
@@ -58,12 +63,15 @@ class MainApp:
         enable_xiaozhi: bool = True,
         enable_openclaw: bool = False,
         enable_openai: bool = False,
+        enable_hermes: bool = False,
     ):
         """Initialize the main application.
 
         Args:
             enable_xiaozhi: Whether to enable XiaoZhi AI connection
             enable_openclaw: Whether to enable OpenClaw connection
+            enable_openai: Whether to enable OpenAI-compatible service
+            enable_hermes: Whether to enable Hermes Agent native backend
         """
         if MainApp._instance is not None:
             raise Exception("MainApp is singleton, use instance() to get instance")
@@ -76,6 +84,7 @@ class MainApp:
         self._enable_xiaozhi = enable_xiaozhi
         self._enable_openclaw = enable_openclaw
         self._enable_openai = enable_openai
+        self._enable_hermes = enable_hermes
 
         # Device state
         self.device_state = DeviceState.IDLE
@@ -148,6 +157,12 @@ class MainApp:
                 == "local_asr"
             ):
                 local_asr_backends.append("OpenAI")
+            if (
+                self._enable_hermes
+                and self.config.get_app_config("hermes.input_mode", "local_asr")
+                == "local_asr"
+            ):
+                local_asr_backends.append("Hermes")
             if local_asr_backends:
                 raise RuntimeError(
                     "Audio input is disabled (AUDIO_INPUT_ENABLE=false) but "
@@ -183,6 +198,9 @@ class MainApp:
         if self._enable_openai:
             OpenAIManager.initialize_from_config()
             asyncio.run_coroutine_threadsafe(OpenAIManager.connect(), self.loop)
+        if self._enable_hermes:
+            HermesManager.initialize_from_config()
+            asyncio.run_coroutine_threadsafe(HermesManager.connect(), self.loop)
 
         # Start API Server if enabled
         if self._enable_api_server:
@@ -197,7 +215,12 @@ class MainApp:
         main_loop_thread.start()
 
         # Start audio services
-        if self._enable_xiaozhi or self._enable_openclaw or self._enable_openai:
+        if (
+            self._enable_xiaozhi
+            or self._enable_openclaw
+            or self._enable_openai
+            or self._enable_hermes
+        ):
             # Check audio input via env var (same as Rust), default True
             # Supports: "true"/"false", "1"/"0", "yes"/"no", "on"/"off"
             audio_input_enabled = os.environ.get(
@@ -223,6 +246,13 @@ class MainApp:
                     self._enable_openai
                     and self.config.get_app_config(
                         "openai.input_mode", "local_asr"
+                    )
+                    == "local_asr"
+                )
+                or (
+                    self._enable_hermes
+                    and self.config.get_app_config(
+                        "hermes.input_mode", "local_asr"
                     )
                     == "local_asr"
                 )
@@ -357,6 +387,10 @@ class MainApp:
             asyncio.run_coroutine_threadsafe(
                 OpenAIManager.close(), self.loop
             )
+        if HermesManager.is_enabled():
+            asyncio.run_coroutine_threadsafe(
+                HermesManager.close(), self.loop
+            )
 
         if self.loop and self.loop.is_running():
             self.loop.call_soon_threadsafe(self.loop.stop)
@@ -449,3 +483,36 @@ class MainApp:
     def set_openai_session_key(self, session_key: str):
         """Override the OpenAI-compatible service session key at runtime."""
         OpenAIManager.set_session_key(session_key)
+
+    async def send_to_hermes(self, text: str, wait_response: bool = False) -> str | None:
+        """Send message to the Hermes Agent native backend."""
+        try:
+            full_text = text
+            if HermesManager._rule_prompt_for_skill:
+                full_text = text + "\n" + HermesManager._rule_prompt_for_skill
+            return await HermesManager.send(full_text, wait_response=wait_response)
+        except Exception as e:
+            logger.error(f"[MainApp] 发送消息到 Hermes 失败: {type(e).__name__}: {e}")
+            return None
+
+    async def send_to_hermes_and_play_reply(
+        self,
+        text: str,
+        wait_response: bool = False,
+    ) -> str | None:
+        """Send message to the Hermes Agent native backend and play the reply."""
+        try:
+            full_text = text
+            if HermesManager._rule_prompt:
+                full_text = text + "\n" + HermesManager._rule_prompt
+            return await HermesManager.send_and_play_reply(
+                full_text,
+                wait_response=wait_response,
+            )
+        except Exception as e:
+            logger.error(f"[MainApp] 发送消息到 Hermes 失败: {type(e).__name__}: {e}")
+            return None
+
+    def set_hermes_session_key(self, session_key: str):
+        """Override the Hermes Agent session key at runtime."""
+        HermesManager.set_session_key(session_key)
