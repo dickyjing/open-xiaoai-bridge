@@ -241,6 +241,80 @@ class HermesManagerTest(unittest.TestCase):
         result = self.HermesManager._extract_run_output(body)
         self.assertEqual(result, "part-A part-B")
 
+    def test_profile_switch_layers_overlay_on_defaults(self):
+        with _MockServer() as srv:
+            self._configure(
+                srv.base_url,
+                system_prompt="default sys",
+                profiles={
+                    "cto": {
+                        "system_prompt": "你是 CTO",
+                        "session_key": "open-xiaoai-bridge:cto",
+                    },
+                    "ops": {
+                        "system_prompt": "你是 Ops",
+                        "model": "gpt-4o-mini",
+                    },
+                },
+            )
+
+            self.assertEqual(
+                self.HermesManager.list_profiles(), ["cto", "ops"]
+            )
+            self.assertEqual(self.HermesManager.active_profile(), "")
+
+            ok = self.HermesManager.set_profile("cto")
+            self.assertTrue(ok)
+            self.assertEqual(self.HermesManager.active_profile(), "cto")
+            self.assertEqual(self.HermesManager._system_prompt, "你是 CTO")
+            self.assertEqual(
+                self.HermesManager._session_key, "open-xiaoai-bridge:cto"
+            )
+            # base_url should fall back to default since the profile didn't set it
+            self.assertEqual(self.HermesManager._base_url, srv.base_url)
+
+            # Switching to ops applies different overlay on top of defaults
+            self.HermesManager.set_profile("ops")
+            self.assertEqual(self.HermesManager._system_prompt, "你是 Ops")
+            self.assertEqual(self.HermesManager._model, "gpt-4o-mini")
+            # ops did NOT override session_key → fall back to default
+            self.assertEqual(self.HermesManager._session_key, "unit-test")
+
+            # Unknown profile is a no-op (returns False, state preserved)
+            ok = self.HermesManager.set_profile("does-not-exist")
+            self.assertFalse(ok)
+            self.assertEqual(self.HermesManager.active_profile(), "ops")
+
+            # Reset clears the overlay
+            self.HermesManager.reset_profile()
+            self.assertEqual(self.HermesManager.active_profile(), "")
+            self.assertEqual(self.HermesManager._system_prompt, "default sys")
+            self.assertEqual(self.HermesManager._model, "")
+
+    def test_profile_session_key_in_post_payload(self):
+        with _MockServer() as srv:
+            _RunsHandler.poll_sequence = [
+                {"status": "completed", "output": "ok"}
+            ]
+            self._configure(
+                srv.base_url,
+                profiles={
+                    "cto": {"session_key": "open-xiaoai-bridge:cto"},
+                },
+            )
+            self.HermesManager.set_profile("cto")
+            asyncio.run(self.HermesManager.send("hi", wait_response=True))
+
+        payload = _RunsHandler.last_post_payload
+        self.assertIsNotNone(payload)
+        # session_id (server-side thread) should be the profile's session_key
+        self.assertEqual(payload["session_id"], "open-xiaoai-bridge:cto")
+        # X-Hermes-Session-Key header should also follow the profile
+        headers = _RunsHandler.last_post_headers or {}
+        self.assertEqual(
+            headers.get("X-Hermes-Session-Key"), "open-xiaoai-bridge:cto"
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

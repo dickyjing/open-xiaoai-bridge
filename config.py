@@ -79,6 +79,21 @@ async def before_wakeup(speaker, text, source, app):
             await speaker.play(text="小赫来了")
             return "hermes"
 
+        # --- 多 Agent 路由示例（issue #4）：唤醒词 → Hermes profile ---
+        # 启用前先在 hermes.profiles 中配置对应 profile，并把 enable_hermes 打开。
+        # HERMES_PROFILE_KEYWORDS = {
+        #     "老板": "cto",
+        #     "产品": "pm",
+        #     "开发": "dev",
+        #     "测试": "qa",
+        #     "运维": "ops",
+        # }
+        # for keyword, profile in HERMES_PROFILE_KEYWORDS.items():
+        #     if keyword in text:
+        #         if app.set_hermes_profile(profile):
+        #             await speaker.play(text=f"{keyword}来了")
+        #             return "hermes"
+
         if "小智" in text:
             await speaker.play(text="小智来了")
             return "xiaozhi"
@@ -134,6 +149,37 @@ async def before_wakeup(speaker, text, source, app):
             await speaker.abort_xiaoai()
             await app.send_to_hermes(text.replace("告诉小赫", ""))
             return None
+
+        # --- 双向集成示例（issue #3）：小爱语音 → Hermes 触发具体动作 ---
+        # 这里的提示词只是触发器，真正的实现交给 Hermes Agent 的 skill / tool
+        # 来调度（例如 homeassistant-control / github-issues / google-workspace）。
+        # 默认注释掉，避免和上面的 Demo 唤醒词冲突；真实部署时按需放开。
+        #
+        # # 1) Home Assistant 控制
+        # if "调到" in text or "打开" in text or "关掉" in text:
+        #     await speaker.abort_xiaoai()
+        #     await app.send_to_hermes_and_play_reply(
+        #         f"使用 homeassistant-control skill 执行：{text}"
+        #     )
+        #     return None
+        #
+        # # 2) 给 GitHub 提 issue
+        # if text.startswith("提个 issue"):
+        #     await speaker.abort_xiaoai()
+        #     await app.send_to_hermes_and_play_reply(
+        #         f"使用 github-issues skill 在 dickyjing/open-xiaoai-bridge 仓库新建 issue。"
+        #         f"标题和内容由你判断：{text}"
+        #     )
+        #     return None
+        #
+        # # 3) 查今天的会议
+        # if "今晚有什么会" in text or "今天的会议" in text:
+        #     await speaker.abort_xiaoai()
+        #     await app.send_to_hermes_and_play_reply(
+        #         f"使用 google-workspace skill 查我今天剩余的日历安排，"
+        #         f"按时间顺序口语化播报：{text}"
+        #     )
+        #     return None
 
 
 async def after_wakeup(speaker, source=None, session_key=None):
@@ -365,5 +411,25 @@ APP_CONFIG = {
         "rule_prompt": "注意：将结果处理成纯文字版，不要返回任何 markdown 格式，也不要包含任何代码块，并将字数控制在300字以内",
         "rule_prompt_for_skill": "注意：这条消息是主人通过小爱音箱发送的，他看不到你回复的文字。字数控制在300字以内",
         "extra_body": {},
+        # 多 Agent 路由（issue #4）：唤醒词 → Hermes profile
+        # 每个 profile 可覆盖默认配置的 base_url / api_key / model /
+        # session_key / server_session_id / memory_session_key /
+        # system_prompt / temperature / max_tokens / tts_speaker。
+        # 切换由 before_wakeup 钩子调用 app.set_hermes_profile(name) 触发，
+        # 默认走 in-process 状态切换，无需额外网络握手，<10ms。
+        # 示例（启用前请把 system_prompt / session_key 调成你的实际值）：
+        # "profiles": {
+        #     "cto":  {"system_prompt": "你是 CTO Agent，技术决策果断、回话简短。",
+        #              "session_key":   "open-xiaoai-bridge:cto"},
+        #     "pm":   {"system_prompt": "你是 PM Agent，关注需求拆解和优先级。",
+        #              "session_key":   "open-xiaoai-bridge:pm"},
+        #     "dev":  {"system_prompt": "你是 Dev Agent，写代码细节、给出可运行片段。",
+        #              "session_key":   "open-xiaoai-bridge:dev"},
+        #     "qa":   {"system_prompt": "你是 QA Agent，关注边界条件、回归测试。",
+        #              "session_key":   "open-xiaoai-bridge:qa"},
+        #     "ops":  {"system_prompt": "你是 Ops Agent，运维和故障排查思路。",
+        #              "session_key":   "open-xiaoai-bridge:ops"},
+        # },
+        "profiles": {},
     },
 }

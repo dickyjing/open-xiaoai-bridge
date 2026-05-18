@@ -516,3 +516,23 @@ class MainApp:
     def set_hermes_session_key(self, session_key: str):
         """Override the Hermes Agent session key at runtime."""
         HermesManager.set_session_key(session_key)
+
+    def set_hermes_profile(self, profile: str) -> bool:
+        """Switch the Hermes backend to a named profile (issue #4).
+
+        Profiles are configured under ``hermes.profiles`` in ``config.py``.
+        Each profile may override base_url, api_key, model, session_key,
+        server_session_id, memory_session_key, system_prompt,
+        temperature, max_tokens, and tts_speaker.
+
+        Returns True on success, False if the profile is unknown.
+        """
+        return HermesManager.set_profile(profile)
+
+    def reset_hermes_profile(self):
+        """Drop any active Hermes profile and restore the default config."""
+        HermesManager.reset_profile()
+
+    def list_hermes_profiles(self) -> list[str]:
+        """List configured Hermes profile names."""
+        return HermesManager.list_profiles()

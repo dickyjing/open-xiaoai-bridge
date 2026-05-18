@@ -389,6 +389,41 @@ if "让小黑" in text:
 
 `base_url` 可以直接填到 `/v1`，框架会自动调用 `/chat/completions`；如果你的服务已经给出完整 `/v1/chat/completions` 地址，也可以直接填写完整地址。连续对话会按 `session_key` 保存最近 `history_max_messages` 条上下文；需要隔离多个助手时，可在唤醒前调用 `app.set_openai_session_key("assistant-name")`。
 
+## 🤖 Hermes Agent 原生 backend
+
+走 Hermes Agent API Server 的 **原生 `/v1/runs` 接口**，不是 OpenAI 兼容路径。
+对比兼容路径多三件事：服务端 session 管理（不必每轮上传历史）、长期记忆 scope（`X-Hermes-Session-Key`）、多 Agent profile 路由。
+
+设置 `HERMES_ENABLE=1` 启用。
+
+`config.py` 示例：
+
+```python
+"hermes": {
+    "base_url":     "http://127.0.0.1:8642/v1",
+    "api_key":      "",
+    "model":        "",                    # 留空 → 服务端默认
+    "session_key":  "open-xiaoai-bridge",   # 同时是 session_id + memory scope
+    "system_prompt": "",
+    "tts_speaker": "xiaoai",
+    "profiles": {
+        # 多 Agent 路由：唤醒词 → 不同 system prompt / session
+        # "cto": {"system_prompt": "你是 CTO", "session_key": "open-xiaoai-bridge:cto"},
+        # "ops": {"system_prompt": "你是 Ops", "session_key": "open-xiaoai-bridge:ops"},
+    },
+}
+```
+
+唤醒词：
+
+| 触发 | 行为 |
+|---|---|
+| 喊 `你好小赫` / `小赫小赫` | 进入 Hermes 连续对话 |
+| 对小爱说 `让小赫 ...` | 一次性发送，TTS 念回 |
+| 对小爱说 `告诉小赫 ...` | Fire-and-forget，不等回复 |
+
+完整教程（OpenAI 兼容路径起步、原生 backend、双向集成、多 Agent 路由、故障排查）见 [`docs/hermes-integration.md`](docs/hermes-integration.md)。
+
 ## 🦞 OpenClaw 集成
 
 通过 [OpenClaw](https://github.com/openclaw/openclaw) 将小爱音箱变成你的 AI Agent 终端。

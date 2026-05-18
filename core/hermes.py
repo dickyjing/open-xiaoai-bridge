@@ -85,6 +85,18 @@ class HermesManager(OpenAIManager):
     # the server.
     _server_session_id: str = ""
 
+    # ------------------------------------------------------------------
+    # Multi-profile routing (issue #4)
+    # ------------------------------------------------------------------
+    # Snapshot of the *default* settings loaded from config — kept so
+    # ``set_profile()`` can fall back to it when a profile leaves a
+    # field unspecified, and ``reset_profile()`` can restore everything.
+    _default_settings: dict[str, Any] = {}
+    # Profiles keyed by name (e.g. {"cto": {...}, "ops": {...}}).
+    _profiles: dict[str, dict[str, Any]] = {}
+    # Currently active profile name, or "" when on the default config.
+    _active_profile: str = ""
+
     @classmethod
     def initialize_from_config(cls, enabled: bool | None = None):
         logger.info("[Hermes] Initializing from config...")
@@ -150,14 +162,130 @@ class HermesManager(OpenAIManager):
         cls._memory_session_key = str(config.get("memory_session_key", "") or "")
         cls._server_session_id = str(config.get("server_session_id", "") or "")
 
+        # Load profiles map (e.g. {"cto": {"base_url": ..., "system_prompt": ...}})
+        raw_profiles = config.get("profiles", {})
+        cls._profiles = (
+            {str(k): dict(v) for k, v in raw_profiles.items() if isinstance(v, dict)}
+            if isinstance(raw_profiles, dict)
+            else {}
+        )
+        # Snapshot defaults so set_profile() can layer profile overrides on top.
+        cls._default_settings = {
+            "base_url": cls._base_url,
+            "api_key": cls._api_key,
+            "model": cls._model,
+            "session_key": cls._session_key,
+            "server_session_id": cls._server_session_id,
+            "memory_session_key": cls._memory_session_key,
+            "system_prompt": cls._system_prompt,
+            "temperature": cls._temperature,
+            "max_tokens": cls._max_tokens,
+            "tts_speaker": cls._tts_speaker,
+        }
+        # If a profile was active before reload, re-apply it on top of the
+        # fresh defaults so hot-reload doesn't silently drop the override.
+        if cls._active_profile:
+            cls.set_profile(cls._active_profile, log=False)
+
         if cls._enabled:
             logger.info(
                 f"[Hermes] Enabled, base_url={cls._base_url}, "
                 f"model={cls._model or '<server default>'}, "
                 f"session_key={cls._session_key}, "
                 f"server_session_id={cls._server_session_id or cls._session_key}, "
-                f"send_local_history={cls._send_local_history}"
+                f"send_local_history={cls._send_local_history}, "
+                f"profiles={list(cls._profiles)}, "
+                f"active_profile={cls._active_profile or '<default>'}"
             )
+
+    # ------------------------------------------------------------------
+    # Profile routing
+    # ------------------------------------------------------------------
+    @classmethod
+    def list_profiles(cls) -> list[str]:
+        """Return the list of configured profile names."""
+        if not cls._initialized:
+            cls.initialize_from_config()
+        return sorted(cls._profiles)
+
+    @classmethod
+    def active_profile(cls) -> str:
+        """Return the currently active profile name (``""`` = default)."""
+        return cls._active_profile
+
+    @classmethod
+    def set_profile(cls, profile: str, *, log: bool = True) -> bool:
+        """Switch to ``profile`` — overlay its settings on top of the
+        default config snapshot.
+
+        Returns ``True`` when the profile exists and is now active,
+        ``False`` when the profile is unknown (active state unchanged).
+
+        Profile overlays may set: ``base_url``, ``api_key``, ``model``,
+        ``session_key``, ``server_session_id``, ``memory_session_key``,
+        ``system_prompt``, ``temperature``, ``max_tokens``, ``tts_speaker``.
+        Any field omitted falls back to the default config value.
+        """
+        if not cls._initialized:
+            cls.initialize_from_config()
+
+        overlay = cls._profiles.get(profile)
+        if overlay is None:
+            if log:
+                logger.warning(
+                    f"[Hermes] Unknown profile {profile!r}; "
+                    f"available: {sorted(cls._profiles)}"
+                )
+            return False
+
+        defaults = cls._default_settings or {}
+
+        def _pick(key: str, fallback):
+            return overlay.get(key, defaults.get(key, fallback))
+
+        cls._base_url = str(_pick("base_url", cls._base_url)).rstrip("/")
+        cls._api_key = str(_pick("api_key", cls._api_key) or "")
+        cls._model = str(_pick("model", cls._model) or "")
+        cls._session_key = str(_pick("session_key", cls._session_key))
+        cls._server_session_id = str(
+            _pick("server_session_id", cls._server_session_id) or ""
+        )
+        cls._memory_session_key = str(
+            _pick("memory_session_key", cls._memory_session_key) or ""
+        )
+        cls._system_prompt = str(_pick("system_prompt", cls._system_prompt) or "")
+        cls._temperature = cls._optional_float(_pick("temperature", cls._temperature))
+        cls._max_tokens = cls._optional_int(_pick("max_tokens", cls._max_tokens))
+        cls._tts_speaker = _pick("tts_speaker", cls._tts_speaker)
+
+        cls._active_profile = profile
+        if log:
+            logger.info(
+                f"[Hermes] Profile switched to {profile!r}: "
+                f"base_url={cls._base_url}, model={cls._model or '<server default>'}, "
+                f"session_key={cls._session_key}"
+            )
+        return True
+
+    @classmethod
+    def reset_profile(cls):
+        """Drop any active profile and restore the default config snapshot."""
+        if not cls._default_settings:
+            return
+        d = cls._default_settings
+        cls._base_url = str(d.get("base_url", cls._base_url)).rstrip("/")
+        cls._api_key = str(d.get("api_key", "") or "")
+        cls._model = str(d.get("model", "") or "")
+        cls._session_key = str(d.get("session_key", cls._session_key))
+        cls._server_session_id = str(d.get("server_session_id", "") or "")
+        cls._memory_session_key = str(d.get("memory_session_key", "") or "")
+        cls._system_prompt = str(d.get("system_prompt", "") or "")
+        cls._temperature = d.get("temperature")
+        cls._max_tokens = d.get("max_tokens")
+        cls._tts_speaker = d.get("tts_speaker")
+        prev, cls._active_profile = cls._active_profile, ""
+        if prev:
+            logger.info(f"[Hermes] Profile reset (was {prev!r})")
 
     # ------------------------------------------------------------------
     # Logging tweak — let logs distinguish Hermes from OpenAI.
