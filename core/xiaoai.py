@@ -229,6 +229,8 @@ class XiaoAI:
                             dialog_id,
                             f"外部唤醒词接管: {text}",
                         )
+                        logger.info(f"[XiaoAI] 🔀 外部唤醒词接管: {text}")
+                        await EventManager.wakeup(text, "xiaoai")
                         return
                     elif text and is_final:
                         logger.info(f"[XiaoAI] 🔥 收到指令: {text}")

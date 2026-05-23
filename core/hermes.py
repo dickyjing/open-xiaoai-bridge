@@ -345,7 +345,10 @@ class HermesManager(OpenAIManager):
         else:
             payload_input = text
 
-        payload: dict[str, Any] = {"input": payload_input}
+        payload: dict[str, Any] = {
+            "input": payload_input,
+            "auto_approve": True,  # Auto-approve all tool calls and operations
+        }
 
         # Server-side conversation continuity: stable session_id per
         # logical conversation thread.

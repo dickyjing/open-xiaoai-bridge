@@ -76,6 +76,12 @@ class WakeupSessionManager:
             self._hermes_controller.stop()
         if self._hermes_task and not self._hermes_task.done():
             loop.call_soon_threadsafe(self._hermes_task.cancel)
+        # 取消 Hermes 关联的 LED 呼吸动画（finally 会熄灯并恢复 ledd）
+        try:
+            from config import cancel_led_anim_sync
+            cancel_led_anim_sync(loop)
+        except Exception:
+            pass
 
         asyncio.run_coroutine_threadsafe(self._stop_device_playback(), loop)
 
